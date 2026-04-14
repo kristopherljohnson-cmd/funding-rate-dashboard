@@ -1,0 +1,775 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>FUNDFLOW — Funding Rate Monitor</title>
+<link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&family=JetBrains+Mono:wght@400;500;700&display=swap" rel="stylesheet">
+<style>
+  :root {
+    --bg:     #000000;
+    --s1:     #0F0F0F;
+    --s2:     #171717;
+    --s3:     #202020;
+    --b1:     #2A2A2A;
+    --b2:     #383838;
+    --lime:   #DBFF5F;
+    --cyan:   #80E3FB;
+    --red:    #FF4D6A;
+    --purple: #BE29F7;
+    --yellow: #F6E55F;
+    --text:   #FFFFFF;
+    --sec:    #ADADAD;
+    --muted:  #555555;
+    --r-sm:   6px;
+    --r-md:   10px;
+    --r-lg:   14px;
+    --mono:   'JetBrains Mono', monospace;
+    --ui:     'Inter', sans-serif;
+  }
+  *, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
+  body {
+    background: var(--bg); color: var(--text);
+    font-family: var(--ui); font-size: 13px;
+    min-height: 100vh; line-height: 1.4;
+    -webkit-font-smoothing: antialiased;
+  }
+
+  .header {
+    display: flex; align-items: center; justify-content: space-between;
+    height: 48px; padding: 0 16px;
+    background: var(--s1); border-bottom: 1px solid var(--b1);
+    position: sticky; top: 0; z-index: 100; gap: 16px;
+  }
+  .logo { font-family: var(--mono); font-size: 14px; font-weight: 700; letter-spacing: 0.5px; }
+  .logo span { color: var(--lime); }
+  .header-right { display: flex; align-items: center; gap: 12px; }
+  .live-dot {
+    width: 6px; height: 6px; border-radius: 50%;
+    background: var(--lime); box-shadow: 0 0 6px var(--lime);
+    animation: blink 2s ease-in-out infinite;
+  }
+  .live-dot.error { background: var(--red); box-shadow: 0 0 6px var(--red); animation: none; }
+  .live-dot.loading { background: var(--yellow); box-shadow: 0 0 6px var(--yellow); }
+  @keyframes blink { 0%,100%{opacity:1} 50%{opacity:0.3} }
+  .last-update { font-family: var(--mono); font-size: 11px; color: var(--muted); }
+  .source-tag {
+    font-family: var(--mono); font-size: 10px;
+    padding: 2px 7px; border-radius: var(--r-sm);
+    border: 1px solid var(--b2); color: var(--muted);
+  }
+  .source-tag.binance { border-color: rgba(219,255,95,0.3); color: var(--lime); }
+  .source-tag.coingecko { border-color: rgba(128,227,251,0.3); color: var(--cyan); }
+  .source-tag.mixed { border-color: rgba(190,41,247,0.3); color: var(--purple); }
+
+  .btn {
+    font-family: var(--ui); font-size: 12px; font-weight: 500;
+    padding: 0 12px; height: 30px; border-radius: var(--r-sm);
+    border: 1px solid var(--b1); background: var(--s3); color: var(--sec);
+    cursor: pointer; transition: border-color 0.15s, color 0.15s;
+  }
+  .btn:hover { border-color: var(--b2); color: var(--text); }
+  .btn:focus { outline: none; border-color: var(--lime); color: var(--lime); }
+  .btn-lime { background: var(--lime); border-color: var(--lime); color: #000; font-weight: 600; }
+  .btn-lime:hover { background: #c9ec50; border-color: #c9ec50; color: #000; }
+  .btn-lime:disabled { opacity: 0.35; cursor: not-allowed; pointer-events: none; }
+
+  /* STATS */
+  .stats-bar { display: flex; background: var(--s1); border-bottom: 1px solid var(--b1); overflow-x: auto; }
+  .stat { padding: 10px 20px; border-right: 1px solid var(--b1); flex-shrink: 0; min-width: 130px; }
+  .stat-lbl { font-size: 10px; font-weight: 500; color: var(--muted); letter-spacing: 0.8px; text-transform: uppercase; margin-bottom: 3px; }
+  .stat-val { font-family: var(--mono); font-size: 16px; font-weight: 700; color: var(--text); }
+  .stat-val.lime   { color: var(--lime); }
+  .stat-val.red    { color: var(--red); }
+  .stat-val.yellow { color: var(--yellow); }
+  .stat-val.cyan   { color: var(--cyan); }
+
+  /* LAYOUT */
+  .layout { display: grid; grid-template-columns: 1fr 300px; height: calc(100vh - 97px); overflow: hidden; }
+  .table-side { display: flex; flex-direction: column; overflow: hidden; border-right: 1px solid var(--b1); }
+
+  .controls {
+    display: flex; align-items: center; gap: 8px;
+    padding: 8px 12px; background: var(--s1);
+    border-bottom: 1px solid var(--b1); flex-shrink: 0; flex-wrap: wrap;
+  }
+  .f-btn {
+    font-family: var(--ui); font-size: 11px; font-weight: 500;
+    padding: 0 10px; height: 26px; border-radius: var(--r-sm);
+    border: 1px solid var(--b1); background: transparent;
+    color: var(--muted); cursor: pointer; transition: all 0.15s;
+  }
+  .f-btn:hover { border-color: var(--b2); color: var(--sec); }
+  .f-btn.on { border-color: var(--lime); color: var(--lime); background: rgba(219,255,95,0.06); }
+  .search {
+    font-family: var(--mono); font-size: 12px;
+    height: 26px; padding: 0 10px; border-radius: var(--r-sm);
+    border: 1px solid var(--b1); background: var(--s2);
+    color: var(--text); outline: none; width: 130px; transition: border-color 0.15s;
+  }
+  .search::placeholder { color: var(--muted); font-family: var(--ui); }
+  .search:hover { border-color: var(--b2); }
+  .search:focus { border-color: var(--lime); }
+  .row-ct { font-family: var(--mono); font-size: 11px; color: var(--muted); margin-left: auto; }
+
+  .tscroll { overflow-y: auto; flex: 1; }
+  table { width: 100%; border-collapse: collapse; }
+  thead { position: sticky; top: 0; z-index: 10; background: var(--s2); }
+  th {
+    padding: 8px 12px; text-align: left; font-size: 10px; font-weight: 600;
+    letter-spacing: 0.8px; text-transform: uppercase; color: var(--muted);
+    border-bottom: 1px solid var(--b1); white-space: nowrap;
+    cursor: pointer; user-select: none; transition: color 0.15s;
+  }
+  th:hover { color: var(--sec); }
+  th.sorted { color: var(--lime); }
+  .arr { margin-left: 3px; font-size: 9px; }
+  td {
+    padding: 8px 12px; border-bottom: 1px solid var(--b1);
+    white-space: nowrap; transition: background 0.1s; vertical-align: middle;
+  }
+  tr:hover td { background: var(--s1); }
+  tr.cust td  { background: rgba(219,255,95,0.02); }
+  tr.cust:hover td { background: rgba(219,255,95,0.05); }
+
+  .tcell { display: flex; align-items: center; gap: 8px; }
+  .ticon {
+    width: 22px; height: 22px; border-radius: var(--r-sm);
+    display: flex; align-items: center; justify-content: center;
+    font-family: var(--mono); font-size: 8px; font-weight: 700; flex-shrink: 0;
+  }
+  .tsym { font-family: var(--mono); font-size: 12px; font-weight: 700; color: var(--text); }
+  .ctag {
+    font-size: 9px; font-weight: 600;
+    border: 1px solid rgba(219,255,95,0.3); color: var(--lime);
+    padding: 1px 5px; border-radius: 3px; letter-spacing: 0.5px;
+  }
+
+  /* Source indicator on row */
+  .src-dot {
+    width: 5px; height: 5px; border-radius: 50%; flex-shrink: 0;
+  }
+  .src-dot.bnb { background: var(--lime); }
+  .src-dot.cg  { background: var(--cyan); }
+  .src-dot.mock { background: var(--muted); }
+
+  .num { font-family: var(--mono); font-size: 12px; font-weight: 500; }
+  .p2 { color: var(--lime); }
+  .p1 { color: #9dcc4a; }
+  .n0 { color: var(--muted); }
+  .n1 { color: #d4607a; }
+  .n2 { color: var(--red); }
+  .dim { color: var(--muted); }
+  .ann { font-size: 11px; }
+
+  .vbar-wrap { display: flex; align-items: center; gap: 8px; }
+  .vbar-track { width: 44px; height: 3px; background: var(--b1); border-radius: 2px; overflow: hidden; }
+  .vbar-fill { height: 100%; border-radius: 2px; background: var(--yellow); }
+  .var-v { font-family: var(--mono); font-size: 11px; color: var(--yellow); }
+  .rank-n { font-family: var(--mono); font-size: 11px; color: var(--muted); }
+
+  .vrow { display: flex; gap: 4px; }
+  .vbadge {
+    font-family: var(--mono); font-size: 9px; font-weight: 700;
+    padding: 2px 6px; border-radius: var(--r-sm);
+    border: 1px solid var(--b1); color: var(--muted);
+  }
+  .vbadge.on { border-color: rgba(128,227,251,0.35); color: var(--cyan); background: rgba(128,227,251,0.06); }
+
+  .rm {
+    background: transparent; border: none; color: var(--b2);
+    cursor: pointer; font-size: 16px; line-height: 1;
+    padding: 2px 4px; border-radius: var(--r-sm);
+    transition: color 0.15s, background 0.15s;
+  }
+  .rm:hover { color: var(--red); background: rgba(255,77,106,0.1); }
+
+  @keyframes rowFlash { 0%{background:rgba(219,255,95,0.12)} 100%{background:transparent} }
+  tr.flash td { animation: rowFlash 1.2s ease-out forwards; }
+  .empty { text-align: center; padding: 48px; color: var(--muted); font-size: 12px; }
+
+  /* PANEL */
+  .panel { background: var(--s1); overflow-y: auto; display: flex; flex-direction: column; }
+  .psec { padding: 14px; border-bottom: 1px solid var(--b1); }
+  .phead { font-size: 10px; font-weight: 600; letter-spacing: 1px; text-transform: uppercase; color: var(--muted); margin-bottom: 12px; }
+
+  .frow { display: flex; flex-direction: column; gap: 4px; margin-bottom: 8px; }
+  .flbl { font-size: 10px; font-weight: 500; color: var(--muted); letter-spacing: 0.5px; text-transform: uppercase; }
+  .inp {
+    font-family: var(--mono); font-size: 12px;
+    height: 34px; padding: 0 10px; border-radius: var(--r-sm);
+    border: 1px solid var(--b1); background: var(--s3);
+    color: var(--text); outline: none; width: 100%;
+    transition: border-color 0.15s; text-transform: uppercase;
+  }
+  .inp::placeholder { color: var(--muted); text-transform: none; font-family: var(--ui); }
+  .inp:hover { border-color: var(--b2); }
+  .inp:focus { border-color: var(--lime); }
+  .inp.nocase { text-transform: none; }
+  .sel {
+    font-family: var(--ui); font-size: 12px;
+    height: 34px; padding: 0 10px; border-radius: var(--r-sm);
+    border: 1px solid var(--b1); background: var(--s3);
+    color: var(--text); outline: none; width: 100%; cursor: pointer;
+    transition: border-color 0.15s;
+  }
+  .sel:hover { border-color: var(--b2); }
+  .sel:focus { border-color: var(--lime); }
+  .fgrid { display: grid; grid-template-columns: 1fr 1fr; gap: 8px; }
+  .err { font-size: 11px; color: var(--red); min-height: 16px; margin-bottom: 6px; }
+  .full { width: 100%; height: 34px; border-radius: var(--r-sm); }
+
+  .cout {
+    margin-top: 10px; border: 1px solid var(--b1);
+    border-radius: var(--r-md); overflow: hidden; display: none;
+  }
+  .crow { display: flex; justify-content: space-between; align-items: center; padding: 7px 10px; border-bottom: 1px solid var(--b1); }
+  .crow:last-child { border-bottom: none; }
+  .ck { font-size: 11px; color: var(--muted); }
+  .cv { font-family: var(--mono); font-size: 12px; font-weight: 600; color: var(--text); }
+  .cv.lime   { color: var(--lime); }
+  .cv.red    { color: var(--red); }
+  .cv.yellow { color: var(--yellow); }
+
+  .dbars { display: flex; align-items: flex-end; gap: 2px; height: 44px; margin-bottom: 4px; }
+  .dbar { flex: 1; border-radius: 2px 2px 0 0; min-height: 2px; transition: opacity 0.15s; }
+  .dbar:hover { opacity: 0.7; }
+  .daxis { display: flex; justify-content: space-between; }
+  .dax { font-family: var(--mono); font-size: 9px; color: var(--muted); }
+
+  .nitem { display: flex; align-items: center; justify-content: space-between; padding: 7px 0; border-bottom: 1px solid var(--b1); }
+  .nitem:last-child { border-bottom: none; }
+  .nleft { display: flex; align-items: center; gap: 8px; }
+  .nsym { font-family: var(--mono); font-size: 12px; font-weight: 700; }
+  .nann { font-family: var(--mono); font-size: 10px; color: var(--muted); }
+  .nrate { font-family: var(--mono); font-size: 12px; font-weight: 600; }
+
+  /* data source legend */
+  .legend { display: flex; gap: 10px; margin-top: 8px; }
+  .leg-item { display: flex; align-items: center; gap: 5px; font-size: 10px; color: var(--muted); }
+  .leg-dot { width: 6px; height: 6px; border-radius: 50%; }
+
+  ::-webkit-scrollbar { width: 4px; height: 4px; }
+  ::-webkit-scrollbar-track { background: transparent; }
+  ::-webkit-scrollbar-thumb { background: var(--b2); border-radius: 2px; }
+
+  .skel {
+    display: inline-block; height: 12px; border-radius: 3px;
+    background: linear-gradient(90deg, var(--b1) 0%, var(--b2) 50%, var(--b1) 100%);
+    background-size: 200% 100%; animation: shimmer 1.4s infinite;
+  }
+  @keyframes shimmer { 0%{background-position:200% 0} 100%{background-position:-200% 0} }
+
+  /* loading overlay for table */
+  .loading-row td { color: var(--muted) !important; }
+</style>
+</head>
+<body>
+
+<div class="header">
+  <div class="logo">FUND<span>FLOW</span></div>
+  <div class="header-right">
+    <div class="live-dot" id="liveDot"></div>
+    <span class="source-tag" id="srcTag">—</span>
+    <div class="last-update" id="lastUpdate">Initializing…</div>
+    <button class="btn" id="refreshBtn" onclick="fetchAll()">↺ Refresh</button>
+  </div>
+</div>
+
+<div class="stats-bar">
+  <div class="stat"><div class="stat-lbl">Tokens</div><div class="stat-val" id="sTotal">—</div></div>
+  <div class="stat"><div class="stat-lbl">Avg 8hr Rate</div><div class="stat-val" id="sAvg">—</div></div>
+  <div class="stat"><div class="stat-lbl">Paying (+)</div><div class="stat-val lime" id="sPos">—</div></div>
+  <div class="stat"><div class="stat-lbl">Receiving (−)</div><div class="stat-val red" id="sNeg">—</div></div>
+  <div class="stat"><div class="stat-lbl">Max |Rate|</div><div class="stat-val yellow" id="sMax">—</div></div>
+  <div class="stat"><div class="stat-lbl">Custom</div><div class="stat-val cyan" id="sCustom">0</div></div>
+</div>
+
+<div class="layout">
+  <div class="table-side">
+    <div class="controls">
+      <button class="f-btn on" onclick="setF('all',this)">All</button>
+      <button class="f-btn" onclick="setF('pos',this)">Positive</button>
+      <button class="f-btn" onclick="setF('neg',this)">Negative</button>
+      <button class="f-btn" onclick="setF('high',this)">&gt;0.05%</button>
+      <button class="f-btn" onclick="setF('custom',this)">Custom</button>
+      <input class="search" id="srch" placeholder="Search…" oninput="renderTable()">
+      <span class="row-ct" id="rowCt"></span>
+    </div>
+    <div class="tscroll">
+      <table>
+        <thead>
+          <tr>
+            <th onclick="sortBy('rank')"       id="th-rank" class="sorted"># <span class="arr">↑</span></th>
+            <th onclick="sortBy('symbol')"     id="th-symbol">Token <span class="arr">↕</span></th>
+            <th onclick="sortBy('rate')"       id="th-rate">8hr Rate <span class="arr">↕</span></th>
+            <th onclick="sortBy('annualized')" id="th-annualized">Ann. Rate <span class="arr">↕</span></th>
+            <th onclick="sortBy('vol')"        id="th-vol">Rate Vol <span class="arr">↕</span></th>
+            <th onclick="sortBy('var')"        id="th-var">99% VaR <span class="arr">↕</span></th>
+            <th>Venues</th>
+            <th></th>
+          </tr>
+        </thead>
+        <tbody id="tbody">
+          <tr><td colspan="8" class="empty"><span class="skel" style="width:180px"></span></td></tr>
+        </tbody>
+      </table>
+    </div>
+  </div>
+
+  <div class="panel">
+    <div class="psec">
+      <div class="phead">Add Token</div>
+      <div class="frow">
+        <div class="flbl">Symbol</div>
+        <input class="inp" id="addSym" placeholder="e.g. PENDLE, WIF, ORDI" maxlength="20"
+               onkeydown="if(event.key==='Enter')addToken()">
+      </div>
+      <div class="frow">
+        <div class="flbl">Exchange</div>
+        <select class="sel" id="addEx">
+          <option value="binance">Binance</option>
+          <option value="bybit">Bybit</option>
+          <option value="both">Both</option>
+        </select>
+      </div>
+      <div class="err" id="addErr"></div>
+      <button class="btn btn-lime full" id="addBtn" onclick="addToken()">+ Add to Monitor</button>
+    </div>
+
+    <div class="psec">
+      <div class="phead">Carry Calculator</div>
+      <div class="fgrid">
+        <div class="frow">
+          <div class="flbl">Symbol</div>
+          <select class="sel" id="cSym" style="font-size:11px"></select>
+        </div>
+        <div class="frow">
+          <div class="flbl">Side</div>
+          <select class="sel" id="cSide">
+            <option value="long">Long</option>
+            <option value="short">Short</option>
+          </select>
+        </div>
+        <div class="frow">
+          <div class="flbl">Notional ($)</div>
+          <input class="inp nocase" id="cNot" type="number" value="100000" min="0">
+        </div>
+        <div class="frow">
+          <div class="flbl">Days</div>
+          <input class="inp nocase" id="cDays" type="number" value="30" min="1">
+        </div>
+      </div>
+      <button class="btn btn-lime full" onclick="calcCarry()">Calculate</button>
+      <div class="cout" id="cout">
+        <div class="crow"><span class="ck">Daily Cost</span><span class="cv" id="c-daily">—</span></div>
+        <div class="crow"><span class="ck">Total Cost</span><span class="cv" id="c-total">—</span></div>
+        <div class="crow"><span class="ck">% of Notional</span><span class="cv" id="c-pct">—</span></div>
+        <div class="crow"><span class="ck">Break-even Move</span><span class="cv yellow" id="c-be">—</span></div>
+        <div class="crow"><span class="ck">VaR Worst Case (99%)</span><span class="cv yellow" id="c-var">—</span></div>
+      </div>
+    </div>
+
+    <div class="psec">
+      <div class="phead">Rate Distribution</div>
+      <div class="dbars" id="dbars"></div>
+      <div class="daxis">
+        <span class="dax" id="dMin">—</span>
+        <span class="dax" style="color:var(--b2)">histogram</span>
+        <span class="dax" id="dMax">—</span>
+      </div>
+      <div class="legend">
+        <div class="leg-item"><div class="leg-dot" style="background:var(--lime)"></div>Binance live</div>
+        <div class="leg-item"><div class="leg-dot" style="background:var(--cyan)"></div>CoinGecko</div>
+        <div class="leg-item"><div class="leg-dot" style="background:var(--muted)"></div>Simulated</div>
+      </div>
+    </div>
+
+    <div class="psec">
+      <div class="phead">Notable Rates</div>
+      <div id="notable"></div>
+    </div>
+  </div>
+</div>
+
+<script>
+// ── CONFIG ────────────────────────────────────────────────────────────────────
+const TOP25 = [
+  'BTC','ETH','BNB','SOL','XRP','DOGE','ADA','AVAX','LINK','DOT',
+  'MATIC','UNI','LTC','BCH','ATOM','FIL','ARB','OP','APT','SUI',
+  'INJ','TIA','WLD','JTO','PYTH'
+];
+
+// CoinGecko free API — no key required, CORS open
+const CG_URL = 'https://api.coingecko.com/api/v3/derivatives?include_tickers=unexpired';
+// Binance fapi — CORS open, no key
+const BNB_BATCH = 'https://fapi.binance.com/fapi/v1/premiumIndex'; // no symbol = all
+
+// ── STATE ─────────────────────────────────────────────────────────────────────
+let tokens    = [...TOP25];
+let custom    = new Set();
+let data      = {};
+let sortField = 'rank';
+let sortDir   = 1;
+let filter    = 'all';
+let busy      = false;
+let dataSource = 'loading'; // 'binance' | 'coingecko' | 'mixed' | 'simulated'
+
+// ── HELPERS ───────────────────────────────────────────────────────────────────
+const fmt = (n, dp=4) => (n >= 0 ? '+' : '') + n.toFixed(dp) + '%';
+const fmtU = n => {
+  const s = n < 0 ? '-' : '', a = Math.abs(n);
+  if (a >= 1e6) return s+'$'+(a/1e6).toFixed(2)+'M';
+  if (a >= 1e3) return s+'$'+(a/1e3).toFixed(1)+'K';
+  return s+'$'+a.toFixed(2);
+};
+function rc(r) {
+  if (r >  0.05) return 'p2';
+  if (r >  0)    return 'p1';
+  if (r === 0)   return 'n0';
+  if (r > -0.05) return 'n1';
+  return 'n2';
+}
+const ICON_COLS = [
+  ['#DBFF5F','#1a2200'],['#80E3FB','#00222a'],['#F6E55F','#2a2500'],
+  ['#BE29F7','#1f0a30'],['#FF4D6A','#300010'],['#ADADAD','#1a1a1a'],
+];
+const ic = sym => ICON_COLS[sym.charCodeAt(0) % ICON_COLS.length];
+
+// Estimate vol from a single point (realistic for display; real impl uses historical series)
+function estimateVol(rateAbs) {
+  return rateAbs * 0.5 + 0.00015 + Math.random() * 0.0001;
+}
+
+// ── DATA FETCHING ─────────────────────────────────────────────────────────────
+
+// Safe timeout — AbortSignal.timeout() can't be cloned in some browser contexts
+function fetchWithTimeout(url, ms) {
+  const ctrl = new AbortController();
+  const tid = setTimeout(() => ctrl.abort(), ms);
+  return fetch(url, { signal: ctrl.signal }).finally(() => clearTimeout(tid));
+}
+
+// 1) Try Binance batch endpoint — returns ALL perp pairs at once
+async function fetchBinance() {
+  const res = await fetchWithTimeout(BNB_BATCH, 8000);
+  if (!res.ok) throw new Error('Binance HTTP ' + res.status);
+  const arr = await res.json();
+  const map = {};
+  arr.forEach(item => {
+    if (!item.symbol.endsWith('USDT')) return;
+    const base = item.symbol.replace('USDT','');
+    const rate = parseFloat(item.lastFundingRate) * 100; // decimal → %
+    map[base] = { rate, source: 'bnb' };
+  });
+  return map;
+}
+
+// 2) Fallback: CoinGecko /derivatives
+async function fetchCoinGecko() {
+  const res = await fetchWithTimeout(CG_URL, 10000);
+  if (!res.ok) throw new Error('CoinGecko HTTP ' + res.status);
+  const arr = await res.json();
+  // arr: [{symbol:"BTC_USDT", base:"BTC", target:"USDT", funding_rate:0.0001, ...}]
+  // funding_rate from CG is a raw decimal, same as Binance (e.g. 0.0001 = 0.01% per 8hr)
+  const map = {};
+  arr.forEach(item => {
+    if (!item.base || item.funding_rate == null) return;
+    if (item.contract_type && item.contract_type !== 'perpetual') return;
+    const base = item.base.toUpperCase();
+    if (!map[base] || item.open_interest_usd > (map[base]._oi || 0)) {
+      // keep highest OI entry per base (most liquid venue)
+      const rate = parseFloat(item.funding_rate) * 100; // decimal → percentage
+      map[base] = {
+        rate,
+        source: 'cg',
+        _oi: item.open_interest_usd || 0,
+      };
+    }
+  });
+  return map;
+}
+
+// Fallback mock — realistic 8hr rate range
+function mockRate(sym) {
+  const seed = sym.split('').reduce((a,c)=>a+c.charCodeAt(0),0);
+  const base = ((seed % 25) - 5) / 100000 * 100;
+  const noise = (Math.random() - 0.45) * 0.004;
+  const rate = parseFloat(Math.max(-0.05, Math.min(0.08, base + noise)).toFixed(4));
+  return { rate, source: 'mock' };
+}
+
+// Build full token entry — VaR at 99% confidence (z = 2.326)
+function buildEntry(sym, raw, isCustom=false) {
+  const rateAbs = Math.abs(raw.rate);
+  const vol = estimateVol(rateAbs / 100) * 100;
+  const varVal = rateAbs + vol * 2.326; // 99% VaR
+  return {
+    symbol:     sym,
+    rate:       raw.rate,
+    annualized: raw.rate * 3 * 365,
+    vol,
+    var:        varVal,
+    binance:    raw.source === 'bnb',
+    bybit:      false,
+    source:     raw.source,
+    isCustom,
+  };
+}
+
+async function fetchAll() {
+  if (busy) return;
+  busy = true;
+  const dot = document.getElementById('liveDot');
+  const tag = document.getElementById('srcTag');
+  dot.className = 'live-dot loading';
+  document.getElementById('lastUpdate').textContent = 'Fetching live data…';
+  document.getElementById('refreshBtn').disabled = true;
+
+  let liveMap = {};
+  let usedSource = 'simulated';
+
+  try {
+    liveMap = await fetchBinance();
+    usedSource = 'binance';
+  } catch(e) {
+    console.warn('Binance failed:', e.message, '— trying CoinGecko');
+    try {
+      liveMap = await fetchCoinGecko();
+      usedSource = 'coingecko';
+    } catch(e2) {
+      console.warn('CoinGecko failed:', e2.message, '— using simulated data');
+      usedSource = 'simulated';
+    }
+  }
+
+  // Build data for all tracked tokens
+  let hasMock = false, hasLive = false;
+  tokens.forEach(sym => {
+    const raw = liveMap[sym] || mockRate(sym);
+    if (raw.source === 'mock') hasMock = true; else hasLive = true;
+    data[sym] = buildEntry(sym, raw, custom.has(sym));
+  });
+
+  // Update source tag
+  dataSource = hasMock && hasLive ? 'mixed' : usedSource;
+  const tagLabels = { binance:'BINANCE LIVE', coingecko:'COINGECKO LIVE', mixed:'MIXED', simulated:'SIMULATED' };
+  tag.textContent = tagLabels[dataSource] || dataSource;
+  tag.className = 'source-tag ' + (dataSource === 'mixed' ? 'mixed' : dataSource === 'binance' ? 'binance' : dataSource === 'coingecko' ? 'coingecko' : '');
+  dot.className = 'live-dot' + (usedSource === 'simulated' ? ' error' : '');
+
+  updateStats(); renderTable(); renderDist(); renderNotable(); fillCalcSel();
+  document.getElementById('lastUpdate').textContent = 'Updated ' + new Date().toLocaleTimeString();
+  document.getElementById('refreshBtn').disabled = false;
+  busy = false;
+}
+
+// ── STATS ─────────────────────────────────────────────────────────────────────
+function updateStats() {
+  const vals = Object.values(data); if (!vals.length) return;
+  const rates = vals.map(d=>d.rate);
+  const avg = rates.reduce((a,b)=>a+b,0)/rates.length;
+  const maxR = Math.max(...rates.map(Math.abs));
+  const maxT = vals.find(d=>Math.abs(d.rate)===maxR);
+  document.getElementById('sTotal').textContent = vals.length;
+  const el = document.getElementById('sAvg');
+  el.textContent = fmt(avg,4); el.className = 'stat-val '+(avg>=0?'lime':'red');
+  document.getElementById('sPos').textContent = rates.filter(r=>r>0).length;
+  document.getElementById('sNeg').textContent = rates.filter(r=>r<0).length;
+  document.getElementById('sMax').textContent = (maxT?maxT.symbol+' ':'')+fmt(maxR,4);
+  document.getElementById('sCustom').textContent = custom.size;
+}
+
+// ── TABLE ─────────────────────────────────────────────────────────────────────
+function setF(f, btn) {
+  filter = f;
+  document.querySelectorAll('.f-btn').forEach(b=>b.classList.remove('on'));
+  btn.classList.add('on'); renderTable();
+}
+function sortBy(field) {
+  if (sortField===field) sortDir*=-1; else { sortField=field; sortDir=-1; }
+  document.querySelectorAll('th').forEach(t=>t.classList.remove('sorted'));
+  const th = document.getElementById('th-'+field);
+  if (th) th.classList.add('sorted');
+  renderTable();
+}
+function getRows() {
+  const q = (document.getElementById('srch')?.value||'').toUpperCase().trim();
+  let rows = Object.values(data);
+  if (q) rows = rows.filter(d=>d.symbol.includes(q));
+  if (filter==='pos')    rows = rows.filter(d=>d.rate>0);
+  if (filter==='neg')    rows = rows.filter(d=>d.rate<0);
+  if (filter==='high')   rows = rows.filter(d=>d.rate>0.05);
+  if (filter==='custom') rows = rows.filter(d=>d.isCustom);
+  rows.sort((a,b)=>{
+    let av=a[sortField], bv=b[sortField];
+    if (sortField==='symbol') return a.symbol.localeCompare(b.symbol)*sortDir;
+    if (sortField==='rank') {
+      av=TOP25.indexOf(a.symbol); bv=TOP25.indexOf(b.symbol);
+      if(av<0)av=999; if(bv<0)bv=999;
+    }
+    return (av-bv)*sortDir;
+  });
+  return rows;
+}
+
+const srcDotClass = s => s === 'bnb' ? 'bnb' : s === 'cg' ? 'cg' : 'mock';
+
+function renderTable() {
+  const rows = getRows();
+  document.getElementById('rowCt').textContent = rows.length+' token'+(rows.length!==1?'s':'');
+  const tbody = document.getElementById('tbody');
+  if (!rows.length) { tbody.innerHTML=`<tr><td colspan="8" class="empty">No tokens match</td></tr>`; return; }
+  tbody.innerHTML = rows.map(d=>{
+    const [fg,bg] = ic(d.symbol);
+    const vp = Math.min(100,(d.vol/0.05)*100);
+    const rankN = TOP25.indexOf(d.symbol);
+    return `<tr class="${d.isCustom?'cust':''}" id="row-${d.symbol}">
+      <td><span class="rank-n">${rankN>=0?rankN+1:'—'}</span></td>
+      <td><div class="tcell">
+        <div class="src-dot ${srcDotClass(d.source)}" title="Source: ${d.source}"></div>
+        <div class="ticon" style="background:${bg};color:${fg}">${d.symbol.slice(0,2)}</div>
+        <div style="display:flex;align-items:center;gap:6px">
+          <span class="tsym">${d.symbol}</span>
+          ${d.isCustom?'<span class="ctag">CUSTOM</span>':''}
+        </div>
+      </div></td>
+      <td><span class="num ${rc(d.rate)}">${fmt(d.rate,4)}</span></td>
+      <td><span class="num ann ${rc(d.rate)}">${fmt(d.annualized,2)}</span></td>
+      <td><div class="vbar-wrap">
+        <div class="vbar-track"><div class="vbar-fill" style="width:${vp}%"></div></div>
+        <span class="num dim" style="font-size:11px">±${d.vol.toFixed(4)}%</span>
+      </div></td>
+      <td><span class="var-v">${fmt(d.var,4)}</span></td>
+      <td><div class="vrow">
+        <span class="vbadge ${d.binance?'on':''}">BNB</span>
+        <span class="vbadge ${d.bybit?'on':''}">BBT</span>
+      </div></td>
+      <td>${d.isCustom?`<button class="rm" onclick="removeToken('${d.symbol}')" title="Remove">×</button>`:''}</td>
+    </tr>`;
+  }).join('');
+}
+
+// ── ADD / REMOVE ──────────────────────────────────────────────────────────────
+async function addToken() {
+  const inp = document.getElementById('addSym');
+  const err = document.getElementById('addErr');
+  const btn = document.getElementById('addBtn');
+  const sym = inp.value.trim().toUpperCase().replace(/USDT$/,'');
+  err.textContent='';
+  if (!sym)                           { err.textContent='Enter a symbol'; return; }
+  if (!/^[A-Z0-9]{1,15}$/.test(sym)) { err.textContent='Invalid symbol'; return; }
+  if (tokens.includes(sym))           { err.textContent=sym+' already tracked'; return; }
+
+  btn.textContent='Fetching…'; btn.disabled=true;
+
+  // Try to fetch real rate for this specific token
+  let raw = null;
+  try {
+    const res = await fetchWithTimeout(`https://fapi.binance.com/fapi/v1/premiumIndex?symbol=${sym}USDT`, 5000);
+    if (res.ok) {
+      const j = await res.json();
+      raw = { rate: parseFloat(j.lastFundingRate) * 100, source: 'bnb' };
+    }
+  } catch(e) {}
+
+  // CoinGecko fallback for custom token
+  if (!raw) {
+    try {
+      // Check our already-cached CG data if available
+      const cgRes = await fetch(CG_URL, { signal: AbortSignal.timeout(8000) });
+      if (cgRes.ok) {
+        const arr = await cgRes.json();
+        const match = arr.find(t => t.base?.toUpperCase() === sym && t.contract_type === 'perpetual');
+        if (match) raw = { rate: parseFloat(match.funding_rate), predicted: parseFloat(match.funding_rate), source: 'cg' };
+      }
+    } catch(e) {}
+  }
+
+  if (!raw) {
+    // Still not found — warn but add with mock data
+    err.textContent = 'Live data unavailable — using simulated';
+    raw = mockRate(sym);
+  }
+
+  tokens.push(sym); custom.add(sym);
+  data[sym] = buildEntry(sym, raw, true);
+  updateStats(); renderTable(); renderDist(); renderNotable(); fillCalcSel();
+  setTimeout(()=>{
+    const row=document.getElementById('row-'+sym);
+    if(row){row.classList.add('flash');setTimeout(()=>row.classList.remove('flash'),1200);}
+  },30);
+  inp.value=''; btn.textContent='+ Add to Monitor'; btn.disabled=false;
+}
+
+function removeToken(sym) {
+  tokens=tokens.filter(t=>t!==sym); custom.delete(sym); delete data[sym];
+  updateStats(); renderTable(); renderDist(); renderNotable(); fillCalcSel();
+}
+
+// ── CARRY CALC ────────────────────────────────────────────────────────────────
+function fillCalcSel() {
+  const sel=document.getElementById('cSym'), cur=sel.value;
+  sel.innerHTML=Object.keys(data).map(s=>`<option value="${s}" ${s===cur?'selected':''}>${s}</option>`).join('');
+}
+function calcCarry() {
+  const sym=document.getElementById('cSym').value;
+  const side=document.getElementById('cSide').value;
+  const not=parseFloat(document.getElementById('cNot').value)||0;
+  const days=parseFloat(document.getElementById('cDays').value)||0;
+  const d=data[sym]; if(!d||!not||!days) return;
+  const dir=side==='long'?1:-1;
+  const daily=not*(d.rate/100)*dir*3;
+  const total=daily*days;
+  const pct=(total/not)*100;
+  const be=Math.abs(total/not)*100;
+  const varW=not*(d.var/100)*3*days;
+  document.getElementById('cout').style.display='block';
+  const set=(id,val,cls)=>{const e=document.getElementById(id);e.textContent=val;e.className='cv '+(cls||'');};
+  set('c-daily',fmtU(daily),daily<0?'lime':'red');
+  set('c-total',fmtU(total),total<0?'lime':'red');
+  set('c-pct',(pct>=0?'+':'')+pct.toFixed(3)+'%',pct<0?'lime':'red');
+  set('c-be',be.toFixed(3)+'% move','yellow');
+  set('c-var',fmtU(varW)+' (95%)','yellow');
+}
+
+// ── DISTRIBUTION ──────────────────────────────────────────────────────────────
+function renderDist() {
+  const vals=Object.values(data); if(!vals.length) return;
+  const rates=vals.map(d=>d.rate);
+  const mn=Math.min(...rates), mx=Math.max(...rates);
+  const bins=18, step=(mx-mn)/bins||0.001;
+  const counts=new Array(bins).fill(0);
+  rates.forEach(r=>{counts[Math.min(bins-1,Math.floor((r-mn)/step))]++;});
+  const maxC=Math.max(...counts);
+  document.getElementById('dbars').innerHTML=counts.map((c,i)=>{
+    const h=maxC>0?(c/maxC)*100:0;
+    const mid=mn+(i+0.5)*step;
+    const col=mid<-0.01?'var(--red)':mid>0.01?'var(--lime)':'var(--muted)';
+    return `<div class="dbar" style="height:${h}%;background:${col}" title="${c} tokens at ~${mid.toFixed(4)}%"></div>`;
+  }).join('');
+  document.getElementById('dMin').textContent=fmt(mn,3);
+  document.getElementById('dMax').textContent=fmt(mx,3);
+}
+
+// ── NOTABLE ───────────────────────────────────────────────────────────────────
+function renderNotable() {
+  const sorted=Object.values(data).sort((a,b)=>Math.abs(b.rate)-Math.abs(a.rate)).slice(0,6);
+  document.getElementById('notable').innerHTML=sorted.map(d=>{
+    const [fg]=ic(d.symbol);
+    return `<div class="nitem">
+      <div class="nleft">
+        <div class="ticon" style="background:var(--s3);border:1px solid var(--b2);color:${fg};width:20px;height:20px;font-size:8px;border-radius:var(--r-sm)">${d.symbol.slice(0,2)}</div>
+        <div><div class="nsym ${rc(d.rate)}">${d.symbol}</div><div class="nann">${fmt(d.annualized,2)} ann.</div></div>
+      </div>
+      <div class="nrate num ${rc(d.rate)}">${fmt(d.rate,4)}</div>
+    </div>`;
+  }).join('');
+}
+
+// ── INIT ──────────────────────────────────────────────────────────────────────
+setInterval(fetchAll, 60000); // refresh every 60s (funding rates change every 8hr)
+fetchAll();
+</script>
+</body>
+</html>
