@@ -1,0 +1,1695 @@
+<!DOCTYPE html>
+<html lang="en">
+
+<!-- ============================================================
+     FUNDFLOW — Funding Rate Monitor
+     Single-file app. No build step. No dependencies except
+     Google Fonts (Inter + JetBrains Mono) loaded via CDN.
+     Data sources (in priority order):
+       1. Binance FAPI  — via allorigins CORS proxy
+       2. Bybit v5      — native CORS, no proxy needed
+       3. CoinGecko     — no key, slower, broadest token coverage
+       4. Mock/fallback — deterministic seed from symbol chars
+     Refresh cadence: 60 s (funding rates settle every 8 hr)
+     ============================================================ -->
+
+<head>
+
+  <meta charset="UTF-8">
+  <meta
+    name="viewport"
+    content="width=device-width, initial-scale=1.0"
+  >
+
+  <title>FUNDFLOW — Funding Rate Monitor</title>
+
+  <!-- Typography: Inter for UI, JetBrains Mono for numbers/symbols -->
+  <link
+    href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&family=JetBrains+Mono:wght@400;500;700&display=swap"
+    rel="stylesheet"
+  >
+
+<style>
+
+  /* ── DESIGN TOKENS ──────────────────────────────────────────── */
+
+  :root {
+
+    /* Background scale — darkest to lightest surface */
+    --bg:     #000000;
+    --s1:     #0F0F0F;
+    --s2:     #171717;
+    --s3:     #202020;
+
+    /* Border scale */
+    --b1:     #2A2A2A;
+    --b2:     #383838;
+
+    /* Accent palette */
+    --lime:   #DBFF5F;
+    --cyan:   #80E3FB;
+    --red:    #FF4D6A;
+    --purple: #BE29F7;
+    --yellow: #F6E55F;
+
+    /* Text scale */
+    --text:   #FFFFFF;
+    --sec:    #ADADAD;
+    --muted:  #555555;
+
+    /* Border radii */
+    --r-sm:   6px;
+    --r-md:   10px;
+    --r-lg:   14px;
+
+    /* Font families */
+    --mono:   'JetBrains Mono', monospace;
+    --ui:     'Inter', sans-serif;
+
+  }
+
+  /* ── RESET ──────────────────────────────────────────────────── */
+
+  *,
+  *::before,
+  *::after {
+    box-sizing: border-box;
+    margin:     0;
+    padding:    0;
+  }
+
+  /* ── BASE ───────────────────────────────────────────────────── */
+
+  body {
+    background:              var(--bg);
+    color:                   var(--text);
+    font-family:             var(--ui);
+    font-size:               13px;
+    min-height:              100vh;
+    line-height:             1.4;
+    -webkit-font-smoothing:  antialiased;
+  }
+
+  /* ── HEADER ─────────────────────────────────────────────────── */
+
+  .header {
+    display:          flex;
+    align-items:      center;
+    justify-content:  space-between;
+    height:           48px;
+    padding:          0 16px;
+    background:       var(--s1);
+    border-bottom:    1px solid var(--b1);
+    position:         sticky;
+    top:              0;
+    z-index:          100;
+    gap:              16px;
+  }
+
+  .logo {
+    font-family:    var(--mono);
+    font-size:      14px;
+    font-weight:    700;
+    letter-spacing: 0.5px;
+  }
+
+  .logo span {
+    color: var(--lime);
+  }
+
+  .header-right {
+    display:     flex;
+    align-items: center;
+    gap:         12px;
+  }
+
+  /* Live status indicator dot */
+  .live-dot {
+    width:        6px;
+    height:       6px;
+    border-radius: 50%;
+    background:   var(--lime);
+    box-shadow:   0 0 6px var(--lime);
+    animation:    blink 2s ease-in-out infinite;
+  }
+
+  .live-dot.error {
+    background:  var(--red);
+    box-shadow:  0 0 6px var(--red);
+    animation:   none;
+  }
+
+  .live-dot.loading {
+    background: var(--yellow);
+    box-shadow: 0 0 6px var(--yellow);
+  }
+
+  @keyframes blink {
+    0%,  100% { opacity: 1;   }
+    50%       { opacity: 0.3; }
+  }
+
+  .last-update {
+    font-family: var(--mono);
+    font-size:   11px;
+    color:       var(--muted);
+  }
+
+  /* Source badge shown in header (BINANCE LIVE / COINGECKO / etc.) */
+  .source-tag {
+    font-family:   var(--mono);
+    font-size:     10px;
+    padding:       2px 7px;
+    border-radius: var(--r-sm);
+    border:        1px solid var(--b2);
+    color:         var(--muted);
+  }
+
+  .source-tag.binance {
+    border-color: rgba(219, 255, 95, 0.3);
+    color:        var(--lime);
+  }
+
+  .source-tag.coingecko {
+    border-color: rgba(128, 227, 251, 0.3);
+    color:        var(--cyan);
+  }
+
+  .source-tag.mixed {
+    border-color: rgba(190, 41, 247, 0.3);
+    color:        var(--purple);
+  }
+
+  /* ── BUTTONS ────────────────────────────────────────────────── */
+
+  .btn {
+    font-family:   var(--ui);
+    font-size:     12px;
+    font-weight:   500;
+    padding:       0 12px;
+    height:        30px;
+    border-radius: var(--r-sm);
+    border:        1px solid var(--b1);
+    background:    var(--s3);
+    color:         var(--sec);
+    cursor:        pointer;
+    transition:    border-color 0.15s, color 0.15s;
+  }
+
+  .btn:hover {
+    border-color: var(--b2);
+    color:        var(--text);
+  }
+
+  .btn:focus {
+    outline:      none;
+    border-color: var(--lime);
+    color:        var(--lime);
+  }
+
+  /* Primary action variant — lime fill */
+  .btn-lime {
+    background:   var(--lime);
+    border-color: var(--lime);
+    color:        #000;
+    font-weight:  600;
+  }
+
+  .btn-lime:hover {
+    background:   #c9ec50;
+    border-color: #c9ec50;
+    color:        #000;
+  }
+
+  .btn-lime:disabled {
+    opacity:        0.35;
+    cursor:         not-allowed;
+    pointer-events: none;
+  }
+
+  /* ── STATS BAR ──────────────────────────────────────────────── */
+
+  .stats-bar {
+    display:      flex;
+    background:   var(--s1);
+    border-bottom: 1px solid var(--b1);
+    overflow-x:   auto;
+  }
+
+  .stat {
+    padding:    10px 20px;
+    border-right: 1px solid var(--b1);
+    flex-shrink: 0;
+    min-width:  130px;
+  }
+
+  .stat-lbl {
+    font-size:      10px;
+    font-weight:    500;
+    color:          var(--muted);
+    letter-spacing: 0.8px;
+    text-transform: uppercase;
+    margin-bottom:  3px;
+  }
+
+  .stat-val {
+    font-family: var(--mono);
+    font-size:   16px;
+    font-weight: 700;
+    color:       var(--text);
+  }
+
+  .stat-val.lime   { color: var(--lime);   }
+  .stat-val.red    { color: var(--red);    }
+  .stat-val.yellow { color: var(--yellow); }
+  .stat-val.cyan   { color: var(--cyan);   }
+
+  /* ── MAIN LAYOUT ────────────────────────────────────────────── */
+
+  /* Two-column: scrollable table | fixed right panel */
+  .layout {
+    display:               grid;
+    grid-template-columns: 1fr 300px;
+    height:                calc(100vh - 97px);
+    overflow:              hidden;
+  }
+
+  .table-side {
+    display:       flex;
+    flex-direction: column;
+    overflow:      hidden;
+    border-right:  1px solid var(--b1);
+  }
+
+  /* ── TABLE CONTROLS ─────────────────────────────────────────── */
+
+  .controls {
+    display:       flex;
+    align-items:   center;
+    gap:           8px;
+    padding:       8px 12px;
+    background:    var(--s1);
+    border-bottom: 1px solid var(--b1);
+    flex-shrink:   0;
+    flex-wrap:     wrap;
+  }
+
+  /* Filter pill buttons (All / Positive / Negative / >0.05% / Custom) */
+  .f-btn {
+    font-family:   var(--ui);
+    font-size:     11px;
+    font-weight:   500;
+    padding:       0 10px;
+    height:        26px;
+    border-radius: var(--r-sm);
+    border:        1px solid var(--b1);
+    background:    transparent;
+    color:         var(--muted);
+    cursor:        pointer;
+    transition:    all 0.15s;
+  }
+
+  .f-btn:hover {
+    border-color: var(--b2);
+    color:        var(--sec);
+  }
+
+  .f-btn.on {
+    border-color: var(--lime);
+    color:        var(--lime);
+    background:   rgba(219, 255, 95, 0.06);
+  }
+
+  /* Symbol search input */
+  .search {
+    font-family:   var(--mono);
+    font-size:     12px;
+    height:        26px;
+    padding:       0 10px;
+    border-radius: var(--r-sm);
+    border:        1px solid var(--b1);
+    background:    var(--s2);
+    color:         var(--text);
+    outline:       none;
+    width:         130px;
+    transition:    border-color 0.15s;
+  }
+
+  .search::placeholder {
+    color:       var(--muted);
+    font-family: var(--ui);
+  }
+
+  .search:hover { border-color: var(--b2);   }
+  .search:focus { border-color: var(--lime); }
+
+  /* "N tokens" counter — right-aligned in controls bar */
+  .row-ct {
+    font-family: var(--mono);
+    font-size:   11px;
+    color:       var(--muted);
+    margin-left: auto;
+  }
+
+  /* ── TABLE ──────────────────────────────────────────────────── */
+
+  .tscroll {
+    overflow-y: auto;
+    flex:       1;
+  }
+
+  table {
+    width:           100%;
+    border-collapse: collapse;
+  }
+
+  thead {
+    position:   sticky;
+    top:        0;
+    z-index:    10;
+    background: var(--s2);
+  }
+
+  th {
+    padding:        8px 12px;
+    text-align:     left;
+    font-size:      10px;
+    font-weight:    600;
+    letter-spacing: 0.8px;
+    text-transform: uppercase;
+    color:          var(--muted);
+    border-bottom:  1px solid var(--b1);
+    white-space:    nowrap;
+    cursor:         pointer;
+    user-select:    none;
+    transition:     color 0.15s;
+  }
+
+  th:hover  { color: var(--sec);  }
+  th.sorted { color: var(--lime); }
+
+  /* Sort direction arrow inside <th> */
+  .arr {
+    margin-left: 3px;
+    font-size:   9px;
+  }
+
+  td {
+    padding:        8px 12px;
+    border-bottom:  1px solid var(--b1);
+    white-space:    nowrap;
+    transition:     background 0.1s;
+    vertical-align: middle;
+  }
+
+  tr:hover td              { background: var(--s1);                      }
+  tr.cust  td              { background: rgba(219, 255, 95, 0.02);       }
+  tr.cust:hover td         { background: rgba(219, 255, 95, 0.05);       }
+
+  /* Token cell: dot + icon + name */
+  .tcell {
+    display:     flex;
+    align-items: center;
+    gap:         8px;
+  }
+
+  /* Colored two-letter icon square */
+  .ticon {
+    width:         22px;
+    height:        22px;
+    border-radius: var(--r-sm);
+    display:       flex;
+    align-items:   center;
+    justify-content: center;
+    font-family:   var(--mono);
+    font-size:     8px;
+    font-weight:   700;
+    flex-shrink:   0;
+  }
+
+  /* Symbol text */
+  .tsym {
+    font-family: var(--mono);
+    font-size:   12px;
+    font-weight: 700;
+    color:       var(--text);
+  }
+
+  /* CUSTOM badge on user-added tokens */
+  .ctag {
+    font-size:      9px;
+    font-weight:    600;
+    border:         1px solid rgba(219, 255, 95, 0.3);
+    color:          var(--lime);
+    padding:        1px 5px;
+    border-radius:  3px;
+    letter-spacing: 0.5px;
+  }
+
+  /* ── SOURCE DOTS ────────────────────────────────────────────── */
+  /* Small coloured dot on each row indicating data origin */
+
+  .src-dot {
+    width:        5px;
+    height:       5px;
+    border-radius: 50%;
+    flex-shrink:  0;
+  }
+
+  .src-dot.bnb  { background: var(--lime);   }
+  .src-dot.bbt  { background: var(--cyan);   }
+  .src-dot.cg   { background: var(--purple); }
+  .src-dot.mock { background: var(--muted);  }
+
+  /* ── NUMERIC CELLS ──────────────────────────────────────────── */
+
+  .num { font-family: var(--mono); font-size: 12px; font-weight: 500; }
+
+  /* Rate colour classes: p2 = high positive, n2 = high negative */
+  .p2 { color: var(--lime);   }
+  .p1 { color: #9dcc4a;       }
+  .n0 { color: var(--muted);  }
+  .n1 { color: #d4607a;       }
+  .n2 { color: var(--red);    }
+
+  .dim { color: var(--muted); }
+  .ann { font-size: 11px;     }
+
+  /* ── VOLATILITY BAR ─────────────────────────────────────────── */
+
+  .vbar-wrap  { display: flex; align-items: center; gap: 8px; }
+
+  .vbar-track {
+    width:        44px;
+    height:       3px;
+    background:   var(--b1);
+    border-radius: 2px;
+    overflow:     hidden;
+  }
+
+  .vbar-fill {
+    height:        100%;
+    border-radius: 2px;
+    background:    var(--yellow);
+  }
+
+  .var-v  { font-family: var(--mono); font-size: 11px; color: var(--yellow); }
+  .rank-n { font-family: var(--mono); font-size: 11px; color: var(--muted);  }
+
+  /* ── VENUE BADGES ───────────────────────────────────────────── */
+
+  .vrow { display: flex; gap: 4px; }
+
+  .vbadge {
+    font-family:    var(--mono);
+    font-size:      9px;
+    font-weight:    700;
+    padding:        2px 6px;
+    border-radius:  var(--r-sm);
+    border:         1px solid var(--b1);
+    color:          var(--muted);
+  }
+
+  .vbadge.on {
+    border-color: rgba(128, 227, 251, 0.35);
+    color:        var(--cyan);
+    background:   rgba(128, 227, 251, 0.06);
+  }
+
+  /* ── REMOVE BUTTON (custom tokens only) ─────────────────────── */
+
+  .rm {
+    background:    transparent;
+    border:        none;
+    color:         var(--b2);
+    cursor:        pointer;
+    font-size:     16px;
+    line-height:   1;
+    padding:       2px 4px;
+    border-radius: var(--r-sm);
+    transition:    color 0.15s, background 0.15s;
+  }
+
+  .rm:hover {
+    color:      var(--red);
+    background: rgba(255, 77, 106, 0.1);
+  }
+
+  /* ── ROW ANIMATIONS ─────────────────────────────────────────── */
+
+  @keyframes rowFlash {
+    0%   { background: rgba(219, 255, 95, 0.12); }
+    100% { background: transparent;              }
+  }
+
+  tr.flash td {
+    animation: rowFlash 1.2s ease-out forwards;
+  }
+
+  /* Empty state message (shown when no tokens match filter) */
+  .empty {
+    text-align: center;
+    padding:    48px;
+    color:      var(--muted);
+    font-size:  12px;
+  }
+
+  /* ── RIGHT PANEL ────────────────────────────────────────────── */
+
+  .panel {
+    background:      var(--s1);
+    overflow-y:      auto;
+    display:         flex;
+    flex-direction:  column;
+  }
+
+  .psec {
+    padding:       14px;
+    border-bottom: 1px solid var(--b1);
+  }
+
+  .phead {
+    font-size:      10px;
+    font-weight:    600;
+    letter-spacing: 1px;
+    text-transform: uppercase;
+    color:          var(--muted);
+    margin-bottom:  12px;
+  }
+
+  /* ── FORM ELEMENTS ──────────────────────────────────────────── */
+
+  .frow {
+    display:       flex;
+    flex-direction: column;
+    gap:           4px;
+    margin-bottom: 8px;
+  }
+
+  .flbl {
+    font-size:      10px;
+    font-weight:    500;
+    color:          var(--muted);
+    letter-spacing: 0.5px;
+    text-transform: uppercase;
+  }
+
+  .inp {
+    font-family:    var(--mono);
+    font-size:      12px;
+    height:         34px;
+    padding:        0 10px;
+    border-radius:  var(--r-sm);
+    border:         1px solid var(--b1);
+    background:     var(--s3);
+    color:          var(--text);
+    outline:        none;
+    width:          100%;
+    transition:     border-color 0.15s;
+    text-transform: uppercase;
+  }
+
+  .inp::placeholder {
+    color:          var(--muted);
+    text-transform: none;
+    font-family:    var(--ui);
+  }
+
+  .inp:hover { border-color: var(--b2);   }
+  .inp:focus { border-color: var(--lime); }
+
+  .inp.nocase { text-transform: none; }
+
+  .sel {
+    font-family:   var(--ui);
+    font-size:     12px;
+    height:        34px;
+    padding:       0 10px;
+    border-radius: var(--r-sm);
+    border:        1px solid var(--b1);
+    background:    var(--s3);
+    color:         var(--text);
+    outline:       none;
+    width:         100%;
+    cursor:        pointer;
+    transition:    border-color 0.15s;
+  }
+
+  .sel:hover { border-color: var(--b2);   }
+  .sel:focus { border-color: var(--lime); }
+
+  /* Two-column grid for carry calc inputs */
+  .fgrid {
+    display:               grid;
+    grid-template-columns: 1fr 1fr;
+    gap:                   8px;
+  }
+
+  /* Inline validation error message */
+  .err {
+    font-size:  11px;
+    color:      var(--red);
+    min-height: 16px;
+    margin-bottom: 6px;
+  }
+
+  /* Full-width utility (applied to buttons inside panel) */
+  .full { width: 100%; height: 34px; border-radius: var(--r-sm); }
+
+  /* ── CARRY CALCULATOR OUTPUT ────────────────────────────────── */
+
+  .cout {
+    margin-top:    10px;
+    border:        1px solid var(--b1);
+    border-radius: var(--r-md);
+    overflow:      hidden;
+    display:       none;   /* shown via JS after first calc */
+  }
+
+  .crow {
+    display:         flex;
+    justify-content: space-between;
+    align-items:     center;
+    padding:         7px 10px;
+    border-bottom:   1px solid var(--b1);
+  }
+
+  .crow:last-child { border-bottom: none; }
+
+  .ck { font-size: 11px; color: var(--muted); }
+
+  .cv {
+    font-family: var(--mono);
+    font-size:   12px;
+    font-weight: 600;
+    color:       var(--text);
+  }
+
+  .cv.lime   { color: var(--lime);   }
+  .cv.red    { color: var(--red);    }
+  .cv.yellow { color: var(--yellow); }
+
+  /* ── DISTRIBUTION HISTOGRAM ─────────────────────────────────── */
+
+  .dbars {
+    display:     flex;
+    align-items: flex-end;
+    gap:         2px;
+    height:      44px;
+    margin-bottom: 4px;
+  }
+
+  .dbar {
+    flex:          1;
+    border-radius: 2px 2px 0 0;
+    min-height:    2px;
+    transition:    opacity 0.15s;
+  }
+
+  .dbar:hover { opacity: 0.7; }
+
+  .daxis {
+    display:         flex;
+    justify-content: space-between;
+  }
+
+  .dax {
+    font-family: var(--mono);
+    font-size:   9px;
+    color:       var(--muted);
+  }
+
+  /* ── NOTABLE RATES LIST ─────────────────────────────────────── */
+
+  .nitem {
+    display:         flex;
+    align-items:     center;
+    justify-content: space-between;
+    padding:         7px 0;
+    border-bottom:   1px solid var(--b1);
+  }
+
+  .nitem:last-child { border-bottom: none; }
+
+  .nleft {
+    display:     flex;
+    align-items: center;
+    gap:         8px;
+  }
+
+  .nsym  { font-family: var(--mono); font-size: 12px; font-weight: 700; }
+  .nann  { font-family: var(--mono); font-size: 10px; color: var(--muted); }
+  .nrate { font-family: var(--mono); font-size: 12px; font-weight: 600; }
+
+  /* ── DATA SOURCE LEGEND ─────────────────────────────────────── */
+
+  .legend {
+    display:    flex;
+    gap:        10px;
+    margin-top: 8px;
+  }
+
+  .leg-item {
+    display:     flex;
+    align-items: center;
+    gap:         5px;
+    font-size:   10px;
+    color:       var(--muted);
+  }
+
+  .leg-dot {
+    width:         6px;
+    height:        6px;
+    border-radius: 50%;
+  }
+
+  /* ── SCROLLBARS ─────────────────────────────────────────────── */
+
+  ::-webkit-scrollbar        { width: 4px; height: 4px; }
+  ::-webkit-scrollbar-track  { background: transparent; }
+  ::-webkit-scrollbar-thumb  { background: var(--b2); border-radius: 2px; }
+
+  /* ── SKELETON LOADER ────────────────────────────────────────── */
+
+  .skel {
+    display:         inline-block;
+    height:          12px;
+    border-radius:   3px;
+    background:      linear-gradient(
+      90deg,
+      var(--b1)  0%,
+      var(--b2) 50%,
+      var(--b1) 100%
+    );
+    background-size: 200% 100%;
+    animation:       shimmer 1.4s infinite;
+  }
+
+  @keyframes shimmer {
+    0%   { background-position:  200% 0; }
+    100% { background-position: -200% 0; }
+  }
+
+  /* Mutes all text in a loading row */
+  .loading-row td { color: var(--muted) !important; }
+
+</style>
+</head>
+
+<!-- ══════════════════════════════════════════════════════════════
+     BODY
+     ══════════════════════════════════════════════════════════════ -->
+<body>
+
+<!-- ── HEADER ──────────────────────────────────────────────────── -->
+
+<div class="header">
+  <div class="logo">FUND<span>FLOW</span></div>
+  <div class="header-right">
+    <div class="live-dot" id="liveDot"></div>
+    <span class="source-tag" id="srcTag">—</span>
+    <div class="last-update" id="lastUpdate">Initializing…</div>
+    <button class="btn" id="refreshBtn" onclick="fetchAll()">↺ Refresh</button>
+  </div>
+</div>
+
+<!-- ── STATS BAR ────────────────────────────────────────────────── -->
+
+<div class="stats-bar">
+  <div class="stat">
+    <div class="stat-lbl">Tokens</div>
+    <div class="stat-val" id="sTotal">—</div>
+  </div>
+  <div class="stat">
+    <div class="stat-lbl">Avg 8hr Rate</div>
+    <div class="stat-val" id="sAvg">—</div>
+  </div>
+  <div class="stat">
+    <div class="stat-lbl">Paying (+)</div>
+    <div class="stat-val lime" id="sPos">—</div>
+  </div>
+  <div class="stat">
+    <div class="stat-lbl">Receiving (−)</div>
+    <div class="stat-val red" id="sNeg">—</div>
+  </div>
+  <div class="stat">
+    <div class="stat-lbl">Max |Rate|</div>
+    <div class="stat-val yellow" id="sMax">—</div>
+  </div>
+  <div class="stat">
+    <div class="stat-lbl">Custom</div>
+    <div class="stat-val cyan" id="sCustom">0</div>
+  </div>
+</div>
+
+<!-- ── MAIN LAYOUT ───────────────────────────────────────────────── -->
+
+<div class="layout">
+
+  <!-- Left: sortable/filterable token table -->
+  <div class="table-side">
+
+    <!-- Filter + search controls -->
+    <div class="controls">
+      <button class="f-btn on" onclick="setF('all',this)">All</button>
+      <button class="f-btn"    onclick="setF('pos',this)">Positive</button>
+      <button class="f-btn"    onclick="setF('neg',this)">Negative</button>
+      <button class="f-btn"    onclick="setF('high',this)">&gt;0.05%</button>
+      <button class="f-btn"    onclick="setF('custom',this)">Custom</button>
+      <input
+        class="search"
+        id="srch"
+        placeholder="Search…"
+        oninput="renderTable()"
+      >
+      <span class="row-ct" id="rowCt"></span>
+    </div>
+
+    <!-- Scrollable table area -->
+    <div class="tscroll">
+      <table>
+        <thead>
+          <tr>
+            <th onclick="sortBy('rank')"       id="th-rank"       class="sorted">#          <span class="arr">↑</span></th>
+            <th onclick="sortBy('symbol')"     id="th-symbol"                   >Token      <span class="arr">↕</span></th>
+            <th onclick="sortBy('rate')"       id="th-rate"                     >8hr Rate   <span class="arr">↕</span></th>
+            <th onclick="sortBy('annualized')" id="th-annualized"               >Ann. Rate  <span class="arr">↕</span></th>
+            <th onclick="sortBy('vol')"        id="th-vol"                      >Rate Vol   <span class="arr">↕</span></th>
+            <th onclick="sortBy('var')"        id="th-var"                      >99% VaR    <span class="arr">↕</span></th>
+            <th>Venues</th>
+            <th></th>
+          </tr>
+        </thead>
+        <tbody id="tbody">
+          <!-- Skeleton placeholder while first fetch is in flight -->
+          <tr>
+            <td colspan="8" class="empty">
+              <span class="skel" style="width:180px"></span>
+            </td>
+          </tr>
+        </tbody>
+      </table>
+    </div>
+
+  </div><!-- /table-side -->
+
+  <!-- Right: add token, carry calc, distribution, notable rates -->
+  <div class="panel">
+
+    <!-- Add Token ─────────────────────────────────────────────── -->
+    <div class="psec">
+      <div class="phead">Add Token</div>
+      <div class="frow">
+        <div class="flbl">Symbol</div>
+        <input
+          class="inp"
+          id="addSym"
+          placeholder="e.g. PENDLE, WIF, ORDI"
+          maxlength="20"
+          onkeydown="if(event.key==='Enter')addToken()"
+        >
+      </div>
+      <div class="err" id="addErr"></div>
+      <button
+        class="btn btn-lime full"
+        id="addBtn"
+        onclick="addToken()"
+      >+ Add to Monitor</button>
+    </div>
+
+    <!-- Carry Calculator ──────────────────────────────────────── -->
+    <div class="psec">
+      <div class="phead">Carry Calculator</div>
+      <div class="fgrid">
+        <div class="frow">
+          <div class="flbl">Symbol</div>
+          <select class="sel" id="cSym" style="font-size:11px"></select>
+        </div>
+        <div class="frow">
+          <div class="flbl">Side</div>
+          <select class="sel" id="cSide">
+            <option value="long">Long</option>
+            <option value="short">Short</option>
+          </select>
+        </div>
+        <div class="frow">
+          <div class="flbl">Notional ($)</div>
+          <input class="inp nocase" id="cNot"  type="number" value="100000" min="0">
+        </div>
+        <div class="frow">
+          <div class="flbl">Days</div>
+          <input class="inp nocase" id="cDays" type="number" value="30"     min="1">
+        </div>
+      </div>
+      <button class="btn btn-lime full" onclick="calcCarry()">Calculate</button>
+
+      <!-- Output — hidden until first calculation -->
+      <div class="cout" id="cout">
+        <div class="crow">
+          <span class="ck">Daily Cost</span>
+          <span class="cv" id="c-daily">—</span>
+        </div>
+        <div class="crow">
+          <span class="ck">Total Cost</span>
+          <span class="cv" id="c-total">—</span>
+        </div>
+        <div class="crow">
+          <span class="ck">% of Notional</span>
+          <span class="cv" id="c-pct">—</span>
+        </div>
+        <div class="crow">
+          <span class="ck">Break-even Move</span>
+          <span class="cv yellow" id="c-be">—</span>
+        </div>
+        <div class="crow">
+          <span class="ck">VaR Worst Case (99%)</span>
+          <span class="cv yellow" id="c-var">—</span>
+        </div>
+      </div>
+    </div>
+
+    <!-- Rate Distribution ─────────────────────────────────────── -->
+    <div class="psec">
+      <div class="phead">Rate Distribution</div>
+      <div class="dbars" id="dbars"></div>
+      <div class="daxis">
+        <span class="dax" id="dMin">—</span>
+        <span class="dax" style="color:var(--b2)">histogram</span>
+        <span class="dax" id="dMax">—</span>
+      </div>
+      <div class="legend">
+        <div class="leg-item">
+          <div class="leg-dot" style="background:var(--lime)"></div>Binance live
+        </div>
+        <div class="leg-item">
+          <div class="leg-dot" style="background:var(--cyan)"></div>CoinGecko
+        </div>
+        <div class="leg-item">
+          <div class="leg-dot" style="background:var(--muted)"></div>Simulated
+        </div>
+      </div>
+    </div>
+
+    <!-- Notable Rates ─────────────────────────────────────────── -->
+    <div class="psec">
+      <div class="phead">Notable Rates</div>
+      <div id="notable"></div>
+    </div>
+
+  </div><!-- /panel -->
+
+</div><!-- /layout -->
+
+<!-- ══════════════════════════════════════════════════════════════
+     SCRIPT
+     ══════════════════════════════════════════════════════════════ -->
+<script>
+
+// ── CONFIG ────────────────────────────────────────────────────────────────────
+
+// Default token universe — 250 unique actively traded perpetual futures
+const TOP25 = [
+  // Mega caps
+  'BTC',    'ETH',    'BNB',    'SOL',    'XRP',
+  'DOGE',   'ADA',    'AVAX',   'LINK',   'DOT',
+  'MATIC',  'UNI',    'LTC',    'BCH',    'ATOM',
+  'FIL',    'ARB',    'OP',     'APT',    'SUI',
+  'INJ',    'TIA',    'WLD',    'JTO',    'PYTH',
+
+  // Large caps / tier 2
+  'TON',    'NEAR',   'FTM',    'IMX',    'ENS',
+  'CRV',    'LDO',    'AAVE',   'MKR',    'SNX',
+  'COMP',   'YFI',    'BAL',    '1INCH',  'DYDX',
+  'GMX',    'GNS',    'RDNT',   'PENDLE', 'KWENTA',
+  'VELO',   'GAINS',  'HMX',    'PERP',   'CAP',
+
+  // Layer 1 alts
+  'TRX',    'ETC',    'XLM',    'ALGO',   'ICP',
+  'VET',    'HBAR',   'EOS',    'XTZ',    'ZIL',
+  'ONE',    'CELO',   'KAVA',   'ROSE',   'GLMR',
+  'MOVR',   'CLV',    'CTSI',   'SKL',    'SYS',
+  'REEF',   'RVN',    'ZEN',    'IOTA',   'EGLD',
+  'POWR',   'CTXC',   'STEEM',  'SC',     'XDC',
+
+  // Layer 2s & rollups
+  'METIS',  'BOBA',   'OMG',    'LRC',    'STRK',
+  'MANTA',  'BLAST',  'TAIKO',  'MODE',   'CYBER',
+  'ZETA',   'SCROLL', 'BASE',   'MANTLE', 'ZKFAIR',
+
+  // DeFi
+  'SUSHI',  'CAKE',   'JOE',    'SPELL',  'ALPHA',
+  'RUNE',   'OSMO',   'SCRT',   'GRT',    'UMA',
+  'NEST',   'BADGER', 'CREAM',  'HEGIC',  'MASK',
+  'ZRX',    'BAT',    'KNC',    'NKN',    'BAND',
+
+  // Oracles & data
+  'API3',   'TRB',    'DIA',    'SUPRA',  'ACALA',
+  'DOCK',   'REP',    'PARA',   'FLUX',   'IOTX',
+
+  // NFT & gaming
+  'AXS',    'SAND',   'MANA',   'ENJ',    'CHZ',
+  'FLOW',   'GALA',   'ILV',    'SLP',    'YGG',
+  'PRIME',  'BEAM',   'RON',    'MAGIC',  'TLM',
+  'ALICE',  'PYR',    'HERO',   'NAKA',   'DEAP',
+
+  // Memes & community
+  'SHIB',   'PEPE',   'FLOKI',  'BONK',   'WIF',
+  'BOME',   'BRETT',  'MEME',   'TURBO',  'LADYS',
+  'DEGEN',  'DOGS',   'NEIRO',  'POPCAT', 'MOG',
+  'SATS',   'RATS',   'ORDI',   'TRAC',   'PUPS',
+
+  // Liquid staking / restaking
+  'ANKR',   'RPL',    'SSV',    'SWISE',  'EIGEN',
+  'ETHFI',  'RSTK',   'OMNI',   'ALT',    'REZ',
+  'KELP',   'PUFFER', 'WEETH',  'RSETH',  'WSTETH',
+
+  // RWA & stablecoin infra
+  'FRAX',   'LUSD',   'GHO',    'ONDO',   'MPL',
+  'TRU',    'RBN',    'PAXG',   'DPI',    'INDEX',
+  'CREDIT', 'MAPLE',  'CRVUSD', 'EULER',  'MORPHO',
+
+  // AI & data
+  'FET',    'AGIX',   'OCEAN',  'NMR',    'RLC',
+  'TAO',    'GRASS',  'AIOZ',   'ARKM',   'MASA',
+  'PAAL',   'OLAS',   'SPACE',  'MEDIA',  'SLERF',
+
+  // Exchange tokens
+  'OKB',    'HT',     'KCS',    'GT',     'MX',
+  'NEXO',   'LEO',    'CRO',    'BGB',    'WOO',
+  'VRTX',   'BLUR',   'LOOKS',  'X2Y2',   'SUDO',
+
+  // Cross-chain & bridges
+  'AXEL',   'SYN',    'HOP',    'CELER',  'POLY',
+  'ROUTE',  'MULTI',  'BIFI',   'POLS',   'LI',
+  'SWING',  'SOCKET', 'ACROSS', 'ANY',    'XY',
+
+  // Misc high-volume perps
+  'SUPER',  'RARE',   'RARI',   'NFTX',   'CHR',
+  'STPT',   'IDEX',   'TORN',   'AUCTION','COW',
+];
+
+// ── URLS ──────────────────────────────────────────────────────────────────────
+
+// allorigins proxies Binance FAPI through CORS — free, no API key needed
+const PROXY     = 'https://api.allorigins.win/raw?url=';
+const BNB_URL   = 'https://fapi.binance.com/fapi/v1/premiumIndex';
+const BYBIT_URL = 'https://api.bybit.com/v5/market/tickers?category=linear';
+const CG_URL    = 'https://api.coingecko.com/api/v3/derivatives?include_tickers=unexpired';
+
+// ── STATE ─────────────────────────────────────────────────────────────────────
+
+let tokens     = [...TOP25];  // full list (built-in + user-added)
+let custom     = new Set();   // user-added symbols
+let data       = {};          // keyed by symbol, holds rate/vol/var/etc.
+let sortField  = 'rank';      // current sort column
+let sortDir    = 1;           // 1 = asc, -1 = desc
+let filter     = 'all';       // active filter pill
+let busy       = false;       // prevents concurrent fetch calls
+let dataSource = 'loading';   // label shown in header tag
+
+// ── HELPERS ───────────────────────────────────────────────────────────────────
+
+// Format a rate number with leading sign and fixed decimals
+const fmt = (n, dp = 4) => (n >= 0 ? '+' : '') + n.toFixed(dp) + '%';
+
+// Format a dollar value with K / M suffix
+const fmtU = n => {
+  const s = n < 0 ? '-' : '';
+  const a = Math.abs(n);
+  if (a >= 1e6) return s + '$' + (a / 1e6).toFixed(2) + 'M';
+  if (a >= 1e3) return s + '$' + (a / 1e3).toFixed(1) + 'K';
+  return s + '$' + a.toFixed(2);
+};
+
+// Map a rate value to a CSS colour class (p2 / p1 / n0 / n1 / n2)
+function rc(r) {
+  if (r >  0.05) return 'p2';
+  if (r >  0)    return 'p1';
+  if (r === 0)   return 'n0';
+  if (r > -0.05) return 'n1';
+  return 'n2';
+}
+
+// Six foreground/background pairs used for token icon squares
+const ICON_COLS = [
+  ['#DBFF5F', '#1a2200'],
+  ['#80E3FB', '#00222a'],
+  ['#F6E55F', '#2a2500'],
+  ['#BE29F7', '#1f0a30'],
+  ['#FF4D6A', '#300010'],
+  ['#ADADAD', '#1a1a1a'],
+];
+
+// Pick a stable colour pair from a symbol's first character
+const ic = sym => ICON_COLS[sym.charCodeAt(0) % ICON_COLS.length];
+
+// Simple heuristic vol estimate from the rate itself
+function estimateVol(ratePct) {
+  return Math.abs(ratePct) * 0.6 + 0.003;
+}
+
+// ── DATA FETCHING ─────────────────────────────────────────────────────────────
+
+// Wraps fetch() with an AbortController timeout
+function fetchWithTimeout(url, ms) {
+  const ctrl = new AbortController();
+  const tid  = setTimeout(() => ctrl.abort(), ms);
+  return fetch(url, { signal: ctrl.signal }).finally(() => clearTimeout(tid));
+}
+
+// Source 1: Binance FAPI via allorigins CORS proxy
+async function fetchBinance() {
+  const res = await fetchWithTimeout(PROXY + encodeURIComponent(BNB_URL), 10000);
+  if (!res.ok) throw new Error('Binance proxy HTTP ' + res.status);
+  const arr = await res.json();
+  if (!Array.isArray(arr)) throw new Error('Binance: unexpected response shape');
+  const map = {};
+  arr.forEach(item => {
+    if (!item.symbol?.endsWith('USDT')) return;
+    const base = item.symbol.replace('USDT', '');
+    const rate = parseFloat(item.lastFundingRate) * 100;
+    if (isFinite(rate)) map[base] = { rate, source: 'bnb' };
+  });
+  if (Object.keys(map).length < 10) throw new Error('Binance: too few results');
+  return map;
+}
+
+// Source 2: Bybit — native CORS support, no proxy needed
+async function fetchBybit() {
+  const res = await fetchWithTimeout(BYBIT_URL, 8000);
+  if (!res.ok) throw new Error('Bybit HTTP ' + res.status);
+  const json = await res.json();
+  const list = json?.result?.list;
+  if (!Array.isArray(list)) throw new Error('Bybit: unexpected response shape');
+  const map = {};
+  list.forEach(item => {
+    if (!item.symbol?.endsWith('USDT')) return;
+    const base = item.symbol.replace('USDT', '');
+    const rate = parseFloat(item.fundingRate) * 100;
+    if (isFinite(rate)) map[base] = { rate, source: 'bbt' };
+  });
+  if (Object.keys(map).length < 10) throw new Error('Bybit: too few results');
+  return map;
+}
+
+// Source 3: CoinGecko — no key, CORS open, slower
+async function fetchCoinGecko() {
+  const res = await fetchWithTimeout(CG_URL, 12000);
+  if (!res.ok) throw new Error('CoinGecko HTTP ' + res.status);
+  const arr = await res.json();
+  if (!Array.isArray(arr)) throw new Error('CoinGecko: unexpected response shape');
+  const map = {};
+  arr.forEach(item => {
+    if (!item.base || item.funding_rate == null) return;
+    if (item.contract_type && item.contract_type !== 'perpetual') return;
+    const base = item.base.toUpperCase();
+    const rate = parseFloat(item.funding_rate) * 100;
+    if (!isFinite(rate)) return;
+    // Prefer the highest open-interest entry when a symbol appears multiple times
+    if (!map[base] || (item.open_interest_usd || 0) > (map[base]._oi || 0)) {
+      map[base] = { rate, source: 'cg', _oi: item.open_interest_usd || 0 };
+    }
+  });
+  if (Object.keys(map).length < 10) throw new Error('CoinGecko: too few results');
+  return map;
+}
+
+// Fallback mock — deterministic, symmetric, never zero
+function mockRate(sym) {
+  const seed   = sym.split('').reduce((a, c) => a + c.charCodeAt(0), 0);
+  const raw    = (seed % 41) - 20;
+  const offset = raw === 0 ? 1 : raw;
+  return { rate: parseFloat((offset / 1000).toFixed(4)), source: 'mock' };
+}
+
+// Build full token entry — VaR at 99% confidence (z = 2.326)
+function buildEntry(sym, raw, isCustom = false) {
+  const vol    = estimateVol(raw.rate);
+  const varVal = Math.abs(raw.rate) + vol * 2.326;
+  return {
+    symbol:     sym,
+    rate:       raw.rate,
+    annualized: raw.rate * 3 * 365,
+    vol,
+    var:        varVal,
+    binance:    raw.source === 'bnb',
+    bybit:      raw.source === 'bbt',
+    source:     raw.source,
+    isCustom,
+  };
+}
+
+// ── MAIN FETCH ORCHESTRATOR ───────────────────────────────────────────────────
+
+async function fetchAll() {
+  if (busy) return;
+  busy = true;
+
+  const dot = document.getElementById('liveDot');
+  const tag = document.getElementById('srcTag');
+  dot.className = 'live-dot loading';
+  document.getElementById('lastUpdate').textContent  = 'Fetching live data…';
+  document.getElementById('refreshBtn').disabled     = true;
+
+  let usedSource = 'simulated';
+
+  // All three fire in parallel — results collected regardless of failure
+  const results = await Promise.allSettled([
+    fetchBinance(),
+    fetchBybit(),
+    fetchCoinGecko(),
+  ]);
+
+  const [bnbResult, bbtResult, cgResult] = results;
+
+  const bnbMap = bnbResult.status === 'fulfilled' ? bnbResult.value : {};
+  const bbtMap = bbtResult.status === 'fulfilled' ? bbtResult.value : {};
+  const cgMap  = cgResult.status  === 'fulfilled' ? cgResult.value  : {};
+
+  // Determine primary source label (for header tag) by priority
+  if      (bnbResult.status === 'fulfilled') usedSource = 'binance';
+  else if (bbtResult.status === 'fulfilled') usedSource = 'bybit';
+  else if (cgResult.status  === 'fulfilled') usedSource = 'coingecko';
+  else                                       usedSource = 'simulated';
+
+  // Log partial failures even when at least one source succeeded
+  if (usedSource === 'simulated') {
+    console.warn('All live sources failed');
+    console.warn('Binance:',   bnbResult.reason?.message);
+    console.warn('Bybit:',     bbtResult.reason?.message);
+    console.warn('CoinGecko:', cgResult.reason?.message);
+    document.getElementById('lastUpdate').textContent = 'All sources failed — simulated data';
+  } else {
+    if (bnbResult.status !== 'fulfilled') console.warn('Binance failed:',   bnbResult.reason?.message);
+    if (bbtResult.status !== 'fulfilled') console.warn('Bybit failed:',     bbtResult.reason?.message);
+    if (cgResult.status  !== 'fulfilled') console.warn('CoinGecko failed:', cgResult.reason?.message);
+  }
+
+  // Per-token priority: Binance → Bybit → CoinGecko → mock
+  // CoinGecko is only used if both exchange sources miss a symbol
+  let mockCount = 0;
+  tokens.forEach(sym => {
+    const raw = bnbMap[sym] || bbtMap[sym] || cgMap[sym] || mockRate(sym);
+    if (raw.source === 'mock') mockCount++;
+    data[sym] = buildEntry(sym, raw, custom.has(sym));
+  });
+
+  // Derive composite source tag
+  const hasMock = mockCount > 0;
+  const hasLive = mockCount < tokens.length;
+  dataSource = hasMock && hasLive ? 'mixed' : usedSource;
+
+  const tagLabels = {
+    binance:   'BINANCE LIVE',
+    bybit:     'BYBIT LIVE',
+    coingecko: 'COINGECKO LIVE',
+    mixed:     'MIXED',
+    simulated: 'SIMULATED',
+  };
+
+  tag.textContent = tagLabels[dataSource] || dataSource.toUpperCase();
+  tag.className   = 'source-tag'
+    + (dataSource === 'binance'   ? ' binance'   : '')
+    + (dataSource === 'bybit'     ? ' binance'   : '') // reuse lime style for bybit
+    + (dataSource === 'coingecko' ? ' coingecko' : '')
+    + (dataSource === 'mixed'     ? ' mixed'     : '');
+
+  dot.className = 'live-dot' + (usedSource === 'simulated' ? ' error' : '');
+
+  // Re-render all dynamic sections
+  updateStats();
+  renderTable();
+  renderDist();
+  renderNotable();
+  fillCalcSel();
+
+  const timeStr = new Date().toLocaleTimeString();
+  document.getElementById('lastUpdate').textContent = mockCount > 0
+    ? `Updated ${timeStr} (${mockCount} simulated)`
+    : `Updated ${timeStr}`;
+
+  document.getElementById('refreshBtn').disabled = false;
+  busy = false;
+}
+
+// ── STATS ─────────────────────────────────────────────────────────────────────
+
+function updateStats() {
+  const vals = Object.values(data);
+  if (!vals.length) return;
+
+  const rates = vals.map(d => d.rate);
+  const avg   = rates.reduce((a, b) => a + b, 0) / rates.length;
+  const maxR  = Math.max(...rates.map(Math.abs));
+  const maxT  = vals.find(d => Math.abs(d.rate) === maxR);
+
+  document.getElementById('sTotal').textContent = vals.length;
+
+  const el = document.getElementById('sAvg');
+  el.textContent = fmt(avg, 4);
+  el.className   = 'stat-val ' + (avg >= 0 ? 'lime' : 'red');
+
+  document.getElementById('sPos').textContent    = rates.filter(r => r > 0).length;
+  document.getElementById('sNeg').textContent    = rates.filter(r => r < 0).length;
+  document.getElementById('sMax').textContent    = (maxT ? maxT.symbol + ' ' : '') + fmt(maxR, 4);
+  document.getElementById('sCustom').textContent = custom.size;
+}
+
+// ── TABLE ─────────────────────────────────────────────────────────────────────
+
+// Activate a filter pill and re-render
+function setF(f, btn) {
+  filter = f;
+  document.querySelectorAll('.f-btn').forEach(b => b.classList.remove('on'));
+  btn.classList.add('on');
+  renderTable();
+}
+
+// Toggle sort direction or switch sort column
+function sortBy(field) {
+  if (sortField === field) {
+    sortDir *= -1;
+  } else {
+    sortField = field;
+    sortDir   = field === 'rank' ? 1 : -1;
+  }
+
+  // Reset all header arrows to neutral
+  document.querySelectorAll('th').forEach(t => {
+    t.classList.remove('sorted');
+    const arrEl = t.querySelector('.arr');
+    if (arrEl) arrEl.textContent = '↕';
+  });
+
+  // Apply sorted style to active column
+  const th = document.getElementById('th-' + field);
+  if (th) {
+    th.classList.add('sorted');
+    const arrEl = th.querySelector('.arr');
+    if (arrEl) arrEl.textContent = sortDir === 1 ? '↑' : '↓';
+  }
+
+  renderTable();
+}
+
+// Apply active filter, search query, and sort — returns row array
+function getRows() {
+  const q    = (document.getElementById('srch')?.value || '').toUpperCase().trim();
+  let   rows = Object.values(data);
+
+  if (q)               rows = rows.filter(d => d.symbol.includes(q));
+  if (filter === 'pos')    rows = rows.filter(d => d.rate > 0);
+  if (filter === 'neg')    rows = rows.filter(d => d.rate < 0);
+  if (filter === 'high')   rows = rows.filter(d => d.rate > 0.05);
+  if (filter === 'custom') rows = rows.filter(d => d.isCustom);
+
+  rows.sort((a, b) => {
+    let av = a[sortField];
+    let bv = b[sortField];
+    if (sortField === 'symbol') return a.symbol.localeCompare(b.symbol) * sortDir;
+    if (sortField === 'rank') {
+      av = TOP25.indexOf(a.symbol);
+      bv = TOP25.indexOf(b.symbol);
+      if (av < 0) av = 999;
+      if (bv < 0) bv = 999;
+    }
+    return (av - bv) * sortDir;
+  });
+
+  return rows;
+}
+
+// Return the src-dot CSS class for a source string
+const srcDotClass = s =>
+  s === 'bnb'  ? 'bnb'  :
+  s === 'bbt'  ? 'bbt'  :
+  s === 'cg'   ? 'cg'   : 'mock';
+
+// Re-render the full <tbody> from current state
+function renderTable() {
+  const rows  = getRows();
+  const tbody = document.getElementById('tbody');
+
+  document.getElementById('rowCt').textContent =
+    rows.length + ' token' + (rows.length !== 1 ? 's' : '');
+
+  if (!rows.length) {
+    tbody.innerHTML = `<tr><td colspan="8" class="empty">No tokens match</td></tr>`;
+    return;
+  }
+
+  tbody.innerHTML = rows.map(d => {
+    const [fg, bg] = ic(d.symbol);
+    const vp       = Math.min(100, (d.vol / 0.05) * 100);
+    const rankN    = TOP25.indexOf(d.symbol);
+
+    return `<tr class="${d.isCustom ? 'cust' : ''}" id="row-${d.symbol}">
+      <td>
+        <span class="rank-n">${rankN >= 0 ? rankN + 1 : '—'}</span>
+      </td>
+      <td>
+        <div class="tcell">
+          <div class="src-dot ${srcDotClass(d.source)}" title="Source: ${d.source}"></div>
+          <div class="ticon" style="background:${bg};color:${fg}">${d.symbol.slice(0, 2)}</div>
+          <div style="display:flex;align-items:center;gap:6px">
+            <span class="tsym">${d.symbol}</span>
+            ${d.isCustom ? '<span class="ctag">CUSTOM</span>' : ''}
+          </div>
+        </div>
+      </td>
+      <td><span class="num ${rc(d.rate)}">${fmt(d.rate, 4)}</span></td>
+      <td><span class="num ann ${rc(d.rate)}">${fmt(d.annualized, 2)}</span></td>
+      <td>
+        <div class="vbar-wrap">
+          <div class="vbar-track">
+            <div class="vbar-fill" style="width:${vp}%"></div>
+          </div>
+          <span class="num dim" style="font-size:11px">±${d.vol.toFixed(4)}%</span>
+        </div>
+      </td>
+      <td><span class="var-v">${fmt(d.var, 4)}</span></td>
+      <td>
+        <div class="vrow">
+          <span class="vbadge ${d.binance ? 'on' : ''}">BNB</span>
+          <span class="vbadge ${d.bybit   ? 'on' : ''}">BBT</span>
+        </div>
+      </td>
+      <td>
+        ${d.isCustom
+          ? `<button class="rm" onclick="removeToken('${d.symbol}')" title="Remove">×</button>`
+          : ''}
+      </td>
+    </tr>`;
+  }).join('');
+}
+
+// ── ADD / REMOVE ──────────────────────────────────────────────────────────────
+
+async function addToken() {
+  const inp = document.getElementById('addSym');
+  const err = document.getElementById('addErr');
+  const btn = document.getElementById('addBtn');
+  const sym = inp.value.trim().toUpperCase().replace(/USDT$/, '');
+
+  err.textContent = '';
+
+  if (!sym)                           { err.textContent = 'Enter a symbol';         return; }
+  if (!/^[A-Z0-9]{1,15}$/.test(sym)) { err.textContent = 'Invalid symbol';          return; }
+  if (tokens.includes(sym))           { err.textContent = sym + ' already tracked'; return; }
+
+  btn.textContent = 'Fetching…';
+  btn.disabled    = true;
+
+  // Try live sources in priority order for this specific symbol
+  let raw = null;
+
+  try {
+    const res = await fetchWithTimeout(
+      PROXY + encodeURIComponent(`${BNB_URL}?symbol=${sym}USDT`), 5000
+    );
+    if (res.ok) {
+      const j = await res.json();
+      if (j?.lastFundingRate) raw = { rate: parseFloat(j.lastFundingRate) * 100, source: 'bnb' };
+    }
+  } catch (e) {}
+
+  if (!raw) {
+    try {
+      const res = await fetchWithTimeout(
+        `https://api.bybit.com/v5/market/tickers?category=linear&symbol=${sym}USDT`, 5000
+      );
+      if (res.ok) {
+        const j    = await res.json();
+        const item = j?.result?.list?.[0];
+        if (item?.fundingRate) raw = { rate: parseFloat(item.fundingRate) * 100, source: 'bbt' };
+      }
+    } catch (e) {}
+  }
+
+  if (!raw) {
+    try {
+      const cgRes = await fetchWithTimeout(CG_URL, 8000);
+      if (cgRes.ok) {
+        const arr   = await cgRes.json();
+        const match = arr.find(t => t.base?.toUpperCase() === sym && t.contract_type === 'perpetual');
+        if (match) raw = { rate: parseFloat(match.funding_rate) * 100, source: 'cg' };
+      }
+    } catch (e) {}
+  }
+
+  if (!raw) {
+    // Symbol not found in any live source — warn and use mock
+    err.textContent = 'Live data unavailable — using simulated';
+    raw = mockRate(sym);
+  }
+
+  tokens.push(sym);
+  custom.add(sym);
+  data[sym] = buildEntry(sym, raw, true);
+
+  updateStats();
+  renderTable();
+  renderDist();
+  renderNotable();
+  fillCalcSel();
+
+  // Flash the new row briefly to draw attention
+  setTimeout(() => {
+    const row = document.getElementById('row-' + sym);
+    if (row) {
+      row.classList.add('flash');
+      setTimeout(() => row.classList.remove('flash'), 1200);
+    }
+  }, 30);
+
+  inp.value       = '';
+  btn.textContent = '+ Add to Monitor';
+  btn.disabled    = false;
+}
+
+function removeToken(sym) {
+  tokens = tokens.filter(t => t !== sym);
+  custom.delete(sym);
+  delete data[sym];
+  updateStats();
+  renderTable();
+  renderDist();
+  renderNotable();
+  fillCalcSel();
+}
+
+// ── CARRY CALC ────────────────────────────────────────────────────────────────
+
+// Populate the symbol <select> in the carry calculator panel
+function fillCalcSel() {
+  const sel = document.getElementById('cSym');
+  const cur = sel.value;
+  sel.innerHTML = Object.keys(data)
+    .map(s => `<option value="${s}" ${s === cur ? 'selected' : ''}>${s}</option>`)
+    .join('');
+}
+
+function calcCarry() {
+  const sym  = document.getElementById('cSym').value;
+  const side = document.getElementById('cSide').value;
+  const not  = parseFloat(document.getElementById('cNot').value)  || 0;
+  const days = parseFloat(document.getElementById('cDays').value) || 0;
+  const d    = data[sym];
+
+  if (!d || !not || !days) return;
+
+  // Positive rate = longs pay shorts; dir flips sign for short positions
+  const dir   = side === 'long' ? 1 : -1;
+  const daily = not * (d.rate / 100) * dir * 3;        // 3 settlements/day
+  const total = daily * days;
+  const pct   = (total / not) * 100;
+  const be    = Math.abs(total / not) * 100;
+  const varW  = not * (d.var / 100) * 3 * days;
+
+  document.getElementById('cout').style.display = 'block';
+
+  const set = (id, val, cls) => {
+    const e = document.getElementById(id);
+    e.textContent = val;
+    e.className   = 'cv ' + (cls || '');
+  };
+
+  set('c-daily', fmtU(daily),                               daily < 0 ? 'lime' : 'red');
+  set('c-total', fmtU(total),                               total < 0 ? 'lime' : 'red');
+  set('c-pct',   (pct >= 0 ? '+' : '') + pct.toFixed(3) + '%', pct < 0 ? 'lime' : 'red');
+  set('c-be',    be.toFixed(3) + '% move',                  'yellow');
+  set('c-var',   fmtU(varW) + ' (99%)',                     'yellow');
+}
+
+// ── DISTRIBUTION ──────────────────────────────────────────────────────────────
+
+function renderDist() {
+  const vals = Object.values(data);
+  if (!vals.length) return;
+
+  const rates = vals.map(d => d.rate);
+  const mn    = Math.min(...rates);
+  const mx    = Math.max(...rates);
+  const bins  = 18;
+  const step  = (mx - mn) / bins || 0.001;
+
+  const counts = new Array(bins).fill(0);
+  rates.forEach(r => {
+    counts[Math.min(bins - 1, Math.floor((r - mn) / step))]++;
+  });
+
+  const maxC = Math.max(...counts);
+
+  document.getElementById('dbars').innerHTML = counts.map((c, i) => {
+    const h   = maxC > 0 ? (c / maxC) * 100 : 0;
+    const mid = mn + (i + 0.5) * step;
+    const col = mid < -0.01 ? 'var(--red)' : mid > 0.01 ? 'var(--lime)' : 'var(--muted)';
+    return `<div class="dbar"
+      style="height:${h}%;background:${col}"
+      title="${c} tokens at ~${mid.toFixed(4)}%"></div>`;
+  }).join('');
+
+  document.getElementById('dMin').textContent = fmt(mn, 3);
+  document.getElementById('dMax').textContent = fmt(mx, 3);
+}
+
+// ── NOTABLE ───────────────────────────────────────────────────────────────────
+
+// Show top 6 tokens by absolute rate in the right panel
+function renderNotable() {
+  const sorted = Object.values(data)
+    .sort((a, b) => Math.abs(b.rate) - Math.abs(a.rate))
+    .slice(0, 6);
+
+  document.getElementById('notable').innerHTML = sorted.map(d => {
+    const [fg] = ic(d.symbol);
+    return `<div class="nitem">
+      <div class="nleft">
+        <div class="ticon" style="
+          background: var(--s3);
+          border:     1px solid var(--b2);
+          color:      ${fg};
+          width:      20px;
+          height:     20px;
+          font-size:  8px;
+          border-radius: var(--r-sm);
+        ">${d.symbol.slice(0, 2)}</div>
+        <div>
+          <div class="nsym ${rc(d.rate)}">${d.symbol}</div>
+          <div class="nann">${fmt(d.annualized, 2)} ann.</div>
+        </div>
+      </div>
+      <div class="nrate num ${rc(d.rate)}">${fmt(d.rate, 4)}</div>
+    </div>`;
+  }).join('');
+}
+
+// ── INIT ──────────────────────────────────────────────────────────────────────
+
+// Funding rates update every 8 hours; refreshing every 60 s keeps the display current
+setInterval(fetchAll, 60000);
+fetchAll();
+
+</script>
+</body>
+</html>
